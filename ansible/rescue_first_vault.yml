@@ -1,0 +1,60 @@
+- name: Rescue first Vault
+  hosts: first
+  become: true
+  gather_facts: true
+  environment:
+    VAULT_ADDR: "http://127.0.0.1:8200"
+    
+  tasks:
+  - name: Create peers.json file
+    ansible.builtin.copy:
+      dest: /opt/vault/data/raft/peers.json
+      owner: vault
+      group: vault
+      mode: '0644'
+      content: |
+        [
+          {
+            "id": "first",
+            "address": "192.168.56.10:8201",
+            "non_voter": false
+          }
+        ]
+
+  - name: Restart Vault
+    ansible.builtin.service:
+      name: vault
+      enabled: yes
+      state: restarted
+
+  - name: Read unseal_keys from file
+    set_fact:
+      unseal_key: "{{ lookup('file', 'unseal_key.txt') }}"
+
+  - name: Check Vault Status
+    shell: vault status -format=json
+    register: vault_status
+    failed_when: ( vault_status.rc not in [ 0, 2 ] )
+
+  - name: Set Vault status output as a variable
+    set_fact:
+      vault_status: "{{ vault_status.stdout | from_json }} "
+
+  - name: Unseal Vault
+    shell: vault operator unseal {{ unseal_key }}
+    when: vault_status.initialized and vault_status.sealed
+
+  - name: Read root token from file
+    set_fact:
+      root_token: "{{ lookup('file', 'root_token.txt') }}"
+  
+  - name: Check Vault peer list
+    shell: vault operator raft list-peers 
+    register: vault_peers
+    failed_when: ( vault_peers.rc not in [ 0, 2 ] )
+    environment:
+      VAULT_TOKEN: "{{ root_token }}"
+
+  - name: Print Vault Peers list
+    debug:
+      msg: "{{ vault_peers.stdout}}"

@@ -1,0 +1,154 @@
+- name: Initialize and unseal first Vault
+  hosts: first
+  become: true
+  gather_facts: true
+  environment:
+    VAULT_ADDR: "http://127.0.0.1:8200"
+    
+  tasks:
+  - name: Start Vault
+    ansible.builtin.service:
+      name: vault
+      enabled: yes
+      state: started
+
+  - name: Check if Vault is initialized
+    shell: vault status -format=json
+    register: vault_status
+    failed_when: ( vault_status.rc not in [ 0, 2 ] )
+
+  - name: Set Vault status output as a variable
+    set_fact:
+      vault_status: "{{ vault_status.stdout | from_json }} "
+
+  - name: Initialize Vault if necessary
+    shell: vault operator init -key-shares=1 -key-threshold=1 -format=json
+    register: vault
+    when: not vault_status.initialized
+
+  - name: Save Vault response as variable
+    set_fact:
+      vault_response: "{{ vault.stdout | from_json }}"
+    when: not vault_status.initialized
+
+  - name: Write root token to file
+    copy:
+      content: "{{ vault_response.root_token }}"
+      dest: "root_token"
+    when: not vault_status.initialized
+  
+  - name: Save root token to variable
+    slurp:
+      src: "root_token"
+    register: root_token
+
+  - name: Write unseal keys to file
+    copy:
+      content: "{{ vault_response.unseal_keys_hex }}"
+      dest: "unseal_keys"
+    when: not vault_status.initialized
+
+  - name: Read unseal_keys from file
+    slurp:
+      src: "unseal_keys"
+    register: slurpfile
+
+  - name: Decode and clean the unseal key
+    set_fact:
+      unseal_key: "{{ slurpfile['content'] | b64decode | regex_replace('[\\[\\]]', '')}}"
+
+  - name: Check if Vault is initialized
+    shell: vault status -format=json
+    register: vault_status
+    failed_when: ( vault_status.rc not in [ 0, 2 ] )
+
+  - name: Set Vault status output as a variable
+    set_fact:
+      vault_status: "{{ vault_status.stdout | from_json }} "
+
+  - name: Unseal Vault
+    shell: vault operator unseal {{ unseal_key }}
+    when: vault_status.initialized and vault_status.sealed
+
+  - name: Write the root_token to a local file
+    delegate_to: localhost
+    become: false
+    copy:
+      content: "{{ root_token['content'] | b64decode }}"
+      dest: "root_token.txt"
+
+  - name: Write the unseal_key to a local file
+    delegate_to: localhost
+    become: false
+    copy:
+      content: "{{ unseal_key}}"
+      dest: "unseal_key.txt"
+
+  - name: Enable secret engine
+    shell: vault secrets enable kv
+    environment:
+      VAULT_TOKEN: "{{  root_token['content'] | b64decode }}"
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    register: enable_kv
+    failed_when: ( enable_kv.rc not in [ 0, 2 ] )
+
+- name: Initialize and unseal second/third Vault
+  hosts: second third
+  become: true
+  gather_facts: true
+  environment:
+    VAULT_ADDR: "http://127.0.0.1:8200"
+    
+  tasks:
+  - name: Read unseal_keys from file
+    set_fact:
+      unseal_key: "{{ lookup('file', 'unseal_key.txt') }}"
+
+  - name: Start Vault
+    ansible.builtin.service:
+      name: vault
+      enabled: yes
+      state: started
+
+  - name: Check if Vault is initialized
+    shell: vault status -format=json
+    register: vault_status
+    failed_when: ( vault_status.rc not in [ 0, 2 ] )
+
+  - name: Set Vault status output as a variable
+    set_fact:
+      second_vault_status: "{{ vault_status.stdout | from_json }} "
+
+  - name: Initialize Vault if necessary
+    
+    shell: vault operator init -key-shares=1 -key-threshold=1 -format=json
+    register: second_vault
+    when: not second_vault_status.initialized
+
+  - name: Unseal Vault
+    shell: vault operator unseal {{ unseal_key }}
+    when: second_vault_status.sealed
+
+  - name: Pause for 10 seconds
+    ansible.builtin.pause:
+      seconds: 10
+
+- name: List enabled secrets engines
+  hosts: vault
+  become: false
+  gather_facts: false
+  tasks:
+  - name: Read root token from file
+    set_fact:
+      root_token: "{{ lookup('file', 'root_token.txt') }}"
+
+  - name: List secrets engines and show that the accessor is the same on both nodes
+    shell: vault secrets list -format=json | jq '."kv/".accessor'
+    environment:
+      VAULT_TOKEN: "{{  root_token }}"
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    register: secret_list
+
+  - name: Print listed accessors
+    debug:
+      msg: "{{ secret_list.stdout }}"

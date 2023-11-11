@@ -1,0 +1,60 @@
+- name: Setup remote Vault servers
+  hosts: all
+  become: true
+    
+  tasks:
+  - name: Add an Apt signing key, uses whichever key is at the URL
+    ansible.builtin.apt_key:
+      url: https://apt.releases.hashicorp.com/gpg
+      state: present
+
+  - name: Add specified repository into sources list
+    ansible.builtin.apt_repository:
+      repo: deb [arch=amd64] https://apt.releases.hashicorp.com jammy main
+      state: present
+
+  - name: Update repositories cache and install Vault
+    apt:
+      pkg:
+      - vault
+      - jq
+      update_cache: yes
+      state: present
+
+  - name: Creates directory
+    file:
+      path: /opt/vault/data/
+      state: directory
+      owner: vault
+      group: vault
+      mode: 0775
+
+  - name: Write the vault.hcl file
+    template:
+      src: vault.hcl.j2
+      dest: /etc/vault.d/vault.hcl
+      owner: vault
+      group: vault
+    vars:
+      hostname: "{{ ansible_fqdn }}"
+      ip: "{{ server_ip }}"
+
+  - name: Recursively change ownership of a directory
+    ansible.builtin.file:
+      path: /opt/vault/
+      state: directory
+      recurse: yes
+      owner: vault
+      group: vault
+
+  - name: Enable Vault
+    ansible.builtin.service:
+      name: vault
+      enabled: yes
+      state: stopped
+
+  - name: Add Vault address export to .bashrc
+    ansible.builtin.lineinfile:
+      path: "/home/vagrant/.profile"
+      line: 'export VAULT_ADDR=http://127.0.0.1:8200'
+      state: present

@@ -1,0 +1,119 @@
+- name: Split the brain by killing second
+  hosts: second
+  become: true
+  gather_facts: false
+  environment:
+    VAULT_ADDR: "http://127.0.0.1:8200"
+
+  tasks: 
+  - name: Stop Vault
+    ansible.builtin.systemd:
+      name: vault
+      state: stopped
+
+  - name: Show that there are two folders
+    ansible.builtin.find:
+      paths: /opt/vault/
+    register: vault_folder
+
+  - name: Print nr of folders
+    debug:
+      msg: "{{ vault_folder.examined }}"
+
+  - name: Delete Vault raft storage
+    ansible.builtin.file:
+      dest: /opt/vault/data/
+      state: absent
+  
+  - name: Ensure the folder is deleted
+    ansible.builtin.find:
+      paths: /opt/vault/
+    register: vault_folder
+
+  - name: Print nr of folders
+    debug:
+      msg: "{{ vault_folder.examined }}"
+
+  - name: Pause for 5 seconds
+    ansible.builtin.pause:
+      seconds: 5
+
+  - name: Recreate raft storage folder
+    file:
+      path: /opt/vault/data/
+      state: directory
+      owner: vault
+      group: vault
+      mode: 0775
+
+  - name: Start Vault
+    ansible.builtin.systemd:
+      name: vault
+      state: started
+
+  - name: Pause for 5 seconds
+    ansible.builtin.pause:
+      seconds: 5
+
+  - name: Check if Vault is initialized
+    shell: vault status -format=json
+    register: vault_status
+    failed_when: ( vault_status.rc not in [ 0, 2 ] )
+
+  - name: Set Vault status output as a variable
+    set_fact:
+      vault_status: "{{ vault_status.stdout | from_json }} "
+
+  - name: Initialize Vault if necessary
+    shell: vault operator init -key-shares=1 -key-threshold=1 -format=json
+    register: vault
+    when: not vault_status.initialized
+
+  - name: Save Vault response as variable
+    set_fact:
+      vault_response: "{{ vault.stdout | from_json }}"
+    when: not vault_status.initialized
+
+  - name: Read unseal_keys from file
+    set_fact:
+      unseal_key: "{{ lookup('file', 'unseal_key.txt') }}"
+
+  - name: Unseal Vault
+    shell: vault operator unseal {{ unseal_key }}
+    ignore_errors: true
+
+- name: Verify split
+  hosts: first
+  become: false
+  gather_facts: false
+  environment:
+    VAULT_ADDR: "http://127.0.0.1:8200"
+
+  tasks:
+  - name: Read root token from file
+    set_fact:
+      root_token: "{{ lookup('file', 'root_token.txt') }}"
+  
+  - name: Check Vault peer list
+    shell: vault operator raft list-peers -format=json
+    register: vault_peers
+    failed_when: ( vault_peers.rc not in [ 0, 2 ] )
+    environment:
+      VAULT_TOKEN: "{{ root_token }}"
+    
+  - name: Print Vault Peers list when error
+    debug:
+      msg: "{{ vault_peers.stderr }}"
+    when: vault_peers.stderr | length > 0
+
+  - name: Extract node_id values using json_query
+    vars:
+      query: "data.config.servers[*].node_id"
+    set_fact:
+      node_ids: "{{ vault_peers.stdout | from_json | json_query(query) }}"
+    when: vault_peers.stderr | length == 0
+
+  - name: Print Vault Peers list when no error
+    debug:
+      msg: "{{node_ids}}"
+    when: vault_peers.stderr | length == 0

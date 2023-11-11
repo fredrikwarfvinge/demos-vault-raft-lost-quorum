@@ -1,0 +1,52 @@
+Vagrant.configure("2") do |config|
+  config.vm.define :first do |first|
+    first.vm.box = "ubuntu/jammy64"
+    first.vm.hostname = "first"
+    first.vm.network :private_network, ip: "192.168.56.10"
+    first.vm.synced_folder ".", "/vagrant", create: true
+    ssh_pub_key = File.readlines("#{Dir.home}/.ssh/id_rsa.pub").first.strip
+    first.vm.provision 'shell', inline: "echo #{ssh_pub_key} >> /home/vagrant/.ssh/authorized_keys", privileged: false    
+    first.vm.provision "ansible_local" do |ansible|
+      ansible.playbook = "install_vault.yml"
+      ansible.extra_vars = {
+        server_ip: "192.168.56.10"
+      }
+      ansible.pip_install_cmd = "sudo apt-get install -y python3-distutils && curl -s https://bootstrap.pypa.io/get-pip.py | sudo python3"
+      ansible.install_mode = "pip"
+    end
+  end
+
+  config.vm.define :second do |second|
+    second.vm.box = "ubuntu/jammy64"
+    second.vm.hostname = "second"
+    second.vm.network :private_network, ip: "192.168.56.11"
+    second.vm.synced_folder ".", "/vagrant", create: true
+    ssh_pub_key = File.readlines("#{Dir.home}/.ssh/id_rsa.pub").first.strip
+    second.vm.provision 'shell', inline: "echo #{ssh_pub_key} >> /home/vagrant/.ssh/authorized_keys", privileged: false    
+    second.vm.provision "ansible_local" do |ansible|
+      ansible.playbook = "install_vault.yml"
+      ansible.extra_vars = {
+        server_ip: "192.168.56.11"
+      }
+      ansible.pip_install_cmd = "sudo apt-get install -y python3-distutils && curl -s https://bootstrap.pypa.io/get-pip.py | sudo python3"
+      ansible.install_mode = "pip"
+    end
+  end
+
+  config.vm.define :third do |third|
+    third.vm.box = "ubuntu/jammy64"
+    third.vm.hostname = "third"
+    third.vm.network :private_network, ip: "192.168.56.12"
+    third.vm.synced_folder ".", "/vagrant", create: true
+    ssh_pub_key = File.readlines("#{Dir.home}/.ssh/id_rsa.pub").first.strip
+    third.vm.provision 'shell', inline: "echo #{ssh_pub_key} >> /home/vagrant/.ssh/authorized_keys", privileged: false    
+    third.vm.provision "ansible_local" do |ansible|
+      ansible.playbook = "install_vault.yml"
+      ansible.extra_vars = {
+        server_ip: "192.168.56.12"
+      }
+      ansible.pip_install_cmd = "sudo apt-get install -y python3-distutils && curl -s https://bootstrap.pypa.io/get-pip.py | sudo python3"
+      ansible.install_mode = "pip"
+    end
+  end
+end
